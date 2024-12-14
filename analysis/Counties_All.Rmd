@@ -1,0 +1,498 @@
+---
+title: "Counties_All"
+output: html_document
+---
+
+```{r}
+options(scipen = 5)
+library(tidyr)
+library(stringr)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+root_dir = paste0(dirname(getwd()), '/')
+output_dir = paste0(dirname(getwd()), '/output/counties_all/')
+election20 = read.csv(paste0(root_dir, 'data/election20.csv')) 
+```
+
+```{r}
+
+# analyze county demographics
+demographic_cols = c("TOT_MALE","TOT_FEMALE","WA_MALE","WA_FEMALE",
+                       "BA_MALE","BA_FEMALE","IA_MALE","IA_FEMALE","AA_MALE","AA_FEMALE",
+                       "TOM_MALE","TOM_FEMALE","H_MALE","H_FEMALE",
+                       "MINORITY_MALE","MINORITY_FEMALE")
+  
+election20_perc = election20 |> 
+  select(-X) |>
+  mutate(across(
+    all_of(demographic_cols), 
+    ~ .x / TOT_POP,  # Note the correct placement of the tilde (~)
+    .names = "PERC_{col}"  # Creates new column names with a "Perc_" prefix
+  )) |>
+  select(!all_of(demographic_cols))
+  
+perc_dem_cols = paste0("PERC_",demographic_cols)
+
+```
+
+```{r}
+significant_dem_changes <- function(data, demographic_cols) { 
+  
+  # Calculate changes between 2016 and 2020
+  changes = data |>
+    group_by(STNAME, CTYNAME, county_fips, age) |>
+    reframe(across(all_of(c(demographic_cols, "percent_rep")), ~ diff(.x[order(!!sym("YEAR"))]),
+      .names = "Change_{col}"), 
+      ) |>
+    pivot_longer(cols = starts_with("Change_") & !matches("percent_rep|TOT_POP"), names_to = "Demographic", values_to = "Demographic_Change_Percent") |>
+    mutate(Demographic = gsub("Change_", "", Demographic))|>
+    mutate(Demographic_Change_Percent = as.numeric(Demographic_Change_Percent)) |>
+    arrange(desc(abs(Change_percent_rep)), desc(abs(Demographic_Change_Percent)))
+  return(changes)
+  
+}
+ label_mapping <- c(
+  "PERC_TOT_MALE" = "Total Male Population",
+  "PERC_TOT_FEMALE" = "Total Female Population",
+  "PERC_WA_MALE" = "White Male Population",
+  "PERC_WA_FEMALE" = "White Female Population",
+  "PERC_BA_MALE" = "Black Male Population",
+  "PERC_BA_FEMALE" = "Black Female Population",
+  "PERC_IA_MALE" = "Indigenous Male Population",
+  "PERC_IA_FEMALE" = "Indigenous Female Population",
+  "PERC_H_MALE" = "Hispanic Male Population",
+  "PERC_H_FEMALE" = "Hispanic Female Population",
+  "PERC_MINORITY_MALE" = "Minority Male Population",
+  "PERC_MINORITY_FEMALE" = "Minority Female Population",
+  "PERC_AA_MALE" = "Asian Male Population",
+  "PERC_AA_FEMALE" = "Asian Female Population",
+  "PERC_TOM_MALE" = "Two or More Races Male Population",
+  "PERC_TOM_FEMALE" = "Two or More Races Female Population"
+  )
+
+```
+
+```{r}
+total_changes = significant_dem_changes(data = election20_perc, demographic_cols = perc_dem_cols) |>
+    mutate(DemographicLabel = label_mapping[Demographic]) 
+
+win_margins = total_changes |>
+  group_by(county_fips, Change_percent_rep) |>
+  distinct(county_fips, Change_percent_rep) 
+
+ggplot(win_margins, aes(x = Change_percent_rep * 100)) +
+  geom_histogram(breaks = seq(floor(-10), ceiling(25), by = 1),
+                 color = "black", 
+                 fill = "lightblue") +
+  labs(
+    title = "Histogram of Change in Percent Republican Votes \n in Counties between 2016 and 2020",
+    x = "Change Percent Republican (%)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+ggsave(paste0(output_dir, 'hist.png'))
+
+```
+
+```{r}
+demo_change_avg <- function(data, filename, vals, labs, description) {
+  output_dir = paste0(dirname(getwd()), paste0('/output/counties_all/', filename))
+
+  data = data |>
+  group_by(age, Demographic, DemographicLabel) |>
+  summarise(Demographic_Change_Percent = mean(Demographic_Change_Percent),
+            .groups = "drop") |>
+  arrange(desc(abs(Demographic_Change_Percent))) 
+
+
+  all_bar = data |>
+    filter(!(Demographic %in% c("PERC_TOT_MALE", "PERC_TOT_FEMALE"))) |>
+    mutate(group_label = paste(str_to_title(age), DemographicLabel)) |>
+    select(group_label, Demographic_Change_Percent) |>
+    ggplot(aes(x = reorder(group_label, Demographic_Change_Percent), y = Demographic_Change_Percent * 100, fill = Demographic_Change_Percent > 0)) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    scale_fill_manual(values = vals,
+                    labels = labs)+
+    labs(
+      title =  paste("All Average Demographic Changes \n in Counties that Shifted",description), 
+      x = "Demographic (by age group, race/ethnicity, and sex)",
+      y = "Percent Change (%)",
+      fill = "Populationn Shift"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'all_bar.png'), plot = all_bar, height = 15)
+  
+  
+  # Largest Demographic Changes
+  biggest_change = data |> 
+    filter(abs(Demographic_Change_Percent) >= .005) |>
+    mutate(group_label = paste(str_to_title(age), DemographicLabel)) |>
+    filter(!(Demographic %in% c("PERC_TOT_MALE", "PERC_TOT_FEMALE"))) |>
+    select(group_label, Demographic_Change_Percent) 
+
+
+ 
+  biggest_bar_colors = biggest_change |> ggplot(aes(x = reorder(group_label, Demographic_Change_Percent), y = Demographic_Change_Percent * 100, fill = Demographic_Change_Percent > 0)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = vals,
+                    labels = labs) +
+  labs(
+    title =  paste("Largest Average Demographic Changes in Counties \n that Shifted", description), 
+    x = "Demographic (by age group, race/ethnicity, and sex)",
+    y = "Percent Change (%)",
+    fill = "Population Shift"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'biggest_bar.png'), plot = biggest_bar_colors)
+  
+  # remove age
+  no_age_bar_color = data |>
+  filter(age == "total") |>
+  filter(!(Demographic %in% c("PERC_TOT_MALE", "PERC_TOT_FEMALE"))) |>
+  select(-age) |> ggplot(aes(x = reorder(DemographicLabel, Demographic_Change_Percent), y = Demographic_Change_Percent * 100, fill = Demographic_Change_Percent >   0)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = vals,
+                    labels = labs) +
+  labs(
+    title =  paste("Average Demographic Changes \n in Counties that Shifted", description), 
+    x = "Demographic (by race/ethnicity and sex)",
+    y = "Percent Change (%)",
+    fill = "Population Shift"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'no_age_bar.png'), plot = no_age_bar_color)
+  
+  # age and gender
+  age_gender_bar_color = data |>
+  filter(Demographic %in% c("PERC_TOT_MALE", "PERC_TOT_FEMALE"))|>
+  filter(age != 'total') |>
+  mutate(group_label = paste(str_to_title(age), DemographicLabel)) |>
+  ggplot(aes(x = reorder(group_label, Demographic_Change_Percent), y = Demographic_Change_Percent * 100, fill = Demographic_Change_Percent > 0)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = vals,
+                    labels = labs) +
+  labs(
+    title =  paste("Average Demographic Changes \n in Counties that Shifted", description), 
+    x = "Demographic (by age group and gender)",
+    y = "Percent Change (%)",
+    fill = "Population Shift"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'age_gender_bar.png'), plot = age_gender_bar_color)
+  
+  
+  # just total female male
+  gender = data |>
+    filter(Demographic %in% c("PERC_TOT_MALE", "PERC_TOT_FEMALE")) |>
+    filter(age == 'total') |>
+    mutate(DemographicLabel = if_else(Demographic == "PERC_TOT_MALE", "Total Male Population", "Total Female Population"))|>
+  ggplot(aes(x = reorder(DemographicLabel, Demographic_Change_Percent), y = Demographic_Change_Percent * 100, fill = Demographic_Change_Percent > 0)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = vals,
+                    labels = labs) +
+  labs(
+    title =  paste("Average Demographic Changes \n in Counties that Shifted", description), 
+    x = "Demographic (by gender)",
+    y = "Percent Change (%)",
+    fill = "Population Shift"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'gender_bar.png'), plot = age_gender_bar_color)
+  
+  
+  
+  list(data = data,
+       all_bar = all_bar,
+       biggest_bar = biggest_bar_colors,
+       no_age_bar = no_age_bar_color,
+       age_gender_bar = age_gender_bar_color,
+       gender_bar = gender
+       )
+
+}
+```
+
+```{r}
+#set colors:
+vals = c("TRUE" = "lightskyblue1", "FALSE" = "lightskyblue3")
+labs = c("Population Decrease", "Population Increase")
+
+
+
+slight_shift_dem = total_changes|>
+  filter((Change_percent_rep < 0)&(Change_percent_rep > -.05))
+description = "\n 0-5% Fewer Republican Party Votes in 2020 than 2016 \n"
+slight_shift_dem_results = demo_change_avg(slight_shift_dem, 'slight_shift_dem/', vals, labs, description)
+
+
+shift_dem = total_changes |>
+  filter(Change_percent_rep <= -0.05)
+description = "\n >5% Fewer Republican Party Votes in 2020 than 2016 \n"
+shift_dem_results = demo_change_avg(shift_dem, 'shift_dem/', vals, labs, description)
+
+
+vals = c("TRUE" = "indianred3", "FALSE" = "indianred4")
+labs = c("Population Decrease", "Population Increase")
+
+slight_shift_rep = total_changes|>
+  filter((Change_percent_rep > 0)&(Change_percent_rep < 0.05))
+description = "\n 0-5% More Republican Party Votes in 2020 than 2016"
+slight_shift_rep_results = demo_change_avg(slight_shift_rep, 'slight_shift_rep/', vals, labs, description)
+
+shift_rep = total_changes |>
+  filter(Change_percent_rep >= 0.05)
+description = "\n >5% More Republican Party Votes in 2020 than 2016"
+shift_rep_results = demo_change_avg(shift_rep, 'shift_rep/', vals, labs, description)
+```
+
+```{r}
+# 19 counties
+extreme_shift_rep = total_changes |>
+  filter(Change_percent_rep >= 0.10) 
+description = "\n>10% More Republican Party Votes in 2020 than 2016"
+extreme_shift_rep_results = demo_change_avg(extreme_shift_rep, 'extreme_shift_rep/', vals, labs, description)
+
+# 0 counties shifted more than 10% left
+```
+
+```{r}
+output_dir = paste0(dirname(getwd()), '/output/counties_all/')
+changes = total_changes |> 
+  group_by(age, Demographic, DemographicLabel) |>
+  mutate(dem_change_by_rep_change = cor(Demographic_Change_Percent, Change_percent_rep))|>
+   summarise(dem_change_by_rep_change = mean(dem_change_by_rep_change),
+            .groups = "drop") |>
+  arrange(desc(abs(dem_change_by_rep_change)))
+
+```
+
+```{r}
+vals = c("TRUE" = "indianred4", "FALSE" = "steelblue4")
+labs = c("Democrat", "Republican")
+
+changes |> filter(!(Demographic %in% c("PERC_TOT_MALE", "PERC_TOT_FEMALE"))) |>
+    filter(age != 'total') |>
+    mutate(group_label = paste(str_to_title(age), DemographicLabel)) |>
+    select(group_label, dem_change_by_rep_change) |>
+    ggplot(aes(x = reorder(group_label, dem_change_by_rep_change), y = dem_change_by_rep_change, fill = dem_change_by_rep_change > 0 )) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    scale_fill_manual(values = vals,
+                    labels = labs) +
+    labs(
+      title = "Correlation of Demographic Change to Increased Republican Votes \n\n (Detail)", 
+      x = "Demographic (by age group, race/ethnicity, and sex)",
+      y = "Correlation",
+      fill = "Party Favorability"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'all.png'), height = 15)
+  
+changes |>
+    filter(age == 'total') |>
+    filter(!(Demographic %in% c("PERC_TOT_MALE","PERC_TOT_FEMALE"))) |>
+    mutate(group_label = paste(str_to_title(age), DemographicLabel)) |>
+    select(group_label, dem_change_by_rep_change) |>
+    ggplot(aes(x = reorder(group_label, dem_change_by_rep_change), y = dem_change_by_rep_change, fill = dem_change_by_rep_change > 0 )) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    scale_fill_manual(values = vals,
+                    labels = labs) +
+    labs(
+      title = "Correlation of Demographic Change to Increased Republican Votes \n\n (Summary)", 
+      x = "Demographic (by race/ethnicity, and sex)",
+      y = "Correlation",
+      fill = "Party Favorability"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'totals.png'))
+  
+  
+changes |>
+    filter(age == 'total') |>
+  mutate(DemographicLabel = if_else(Demographic == "PERC_TOT_MALE", "Male Population", "Female Population"))|>
+    filter(Demographic %in% c("PERC_TOT_MALE", "PERC_TOT_FEMALE")) |>
+    mutate(group_label = paste(str_to_title(age), DemographicLabel)) |>
+    select(group_label, dem_change_by_rep_change) |>
+    ggplot(aes(x = reorder(group_label, dem_change_by_rep_change), y = dem_change_by_rep_change, fill = dem_change_by_rep_change > 0 )) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    scale_fill_manual(values = vals,
+                    labels = labs) +
+    labs(
+      title = "Correlation of Demographic Change to Increased Republican Votes \n\n (Summary)", 
+      x = "Demographic (by sex)",
+      y = "Correlation",
+      fill = "Party Favorability"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'by_sex.png'))
+
+```
+
+```{r}
+# Split over counties by population
+# 2,907 counties in small_pop
+small_pop_description = "2907 counties with populations less than 50,000"
+small_pop = election20 |>
+  filter(TOT_POP <= 50000)
+small_pop_perc = elec_perc(small_pop)
+small_pop_changes = significant_dem_changes(data = small_pop_perc, demographic_cols = perc_dem_cols) |>
+    mutate(DemographicLabel = label_mapping[Demographic]) 
+output_dir = paste0(dirname(getwd()), '/output/counties_by_pop/small_pop/small_')
+corr_graphs(small_pop_changes, small_pop_description)
+
+#944 counties in medium_pop
+medium_pop_description = "944 counties with populations between 50,000 and 150,000"
+medium_pop = election20 |>
+  filter((TOT_POP > 50000) & (TOT_POP <= 150000)) 
+med_pop_perc = elec_perc(medium_pop)
+med_pop_changes = significant_dem_changes(data = med_pop_perc, demographic_cols = perc_dem_cols) |>
+    mutate(DemographicLabel = label_mapping[Demographic]) 
+output_dir = paste0(dirname(getwd()), '/output/counties_by_pop/med_pop/medium_')
+corr_graphs(med_pop_changes, medium_pop_description)
+
+
+# 442 counties in large_pop
+large_pop_description = "442 counties with populations greater than 150,000"
+large_pop = election20 |>
+  filter(TOT_POP > 150000)
+lrg_pop_perc = elec_perc(large_pop)
+lrg_pop_changes = significant_dem_changes(data = lrg_pop_perc, demographic_cols = perc_dem_cols) |>
+    mutate(DemographicLabel = label_mapping[Demographic]) 
+output_dir = paste0(dirname(getwd()), '/output/counties_by_pop/lrg_pop/large_')
+corr_graphs(lrg_pop_changes, large_pop_description)
+
+
+```
+
+```{r}
+elec_perc <- function(data){
+  # analyze county demographics
+  demographic_cols = c("TOT_MALE","TOT_FEMALE","WA_MALE","WA_FEMALE",
+                         "BA_MALE","BA_FEMALE","IA_MALE","IA_FEMALE","AA_MALE","AA_FEMALE",
+                         "TOM_MALE","TOM_FEMALE","H_MALE","H_FEMALE",
+                         "MINORITY_MALE","MINORITY_FEMALE")
+    
+  election20_perc = data |> 
+    select(-X) |>
+    mutate(across(
+      all_of(demographic_cols), 
+      ~ .x / TOT_POP,  # Note the correct placement of the tilde (~)
+      .names = "PERC_{col}"  # Creates new column names with a "Perc_" prefix
+    )) |>
+    select(!all_of(demographic_cols))
+  return(election20_perc)
+}
+    
+```
+
+```{r}
+significant_dem_changes <- function(data, demographic_cols) { 
+  
+  # Calculate changes between 2016 and 2020
+  changes = data |>
+    group_by(STNAME, CTYNAME, county_fips, age) |>
+    reframe(across(all_of(c(demographic_cols, "percent_rep")), ~ diff(.x[order(!!sym("YEAR"))]),
+      .names = "Change_{col}"), 
+      ) |>
+    pivot_longer(cols = starts_with("Change_") & !matches("percent_rep|TOT_POP"), names_to = "Demographic", values_to = "Demographic_Change_Percent") |>
+    mutate(Demographic = gsub("Change_", "", Demographic))|>
+    mutate(Demographic_Change_Percent = as.numeric(Demographic_Change_Percent)) |>
+    arrange(desc(abs(Change_percent_rep)), desc(abs(Demographic_Change_Percent)))
+  return(changes)
+  
+}
+```
+
+```{r}
+corr_graphs <- function(total_changes, title_description){
+  changes = total_changes |> 
+  group_by(age, Demographic, DemographicLabel) |>
+  mutate(dem_change_by_rep_change = cor(Demographic_Change_Percent, Change_percent_rep))|>
+   summarise(dem_change_by_rep_change = mean(dem_change_by_rep_change),
+            .groups = "drop") |>
+  arrange(desc(abs(dem_change_by_rep_change)))
+  
+  vals = c("TRUE" = "indianred4", "FALSE" = "steelblue4")
+  labs = c("Democrat", "Republican")
+  
+  changes |> filter(!(Demographic %in% c("PERC_TOT_MALE", "PERC_TOT_FEMALE"))) |>
+    filter(age != 'total') |>
+    mutate(group_label = paste(str_to_title(age), DemographicLabel)) |>
+    select(group_label, dem_change_by_rep_change) |>
+    ggplot(aes(x = reorder(group_label, dem_change_by_rep_change), y = dem_change_by_rep_change, fill = dem_change_by_rep_change > 0 )) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    scale_fill_manual(values = vals,
+                    labels = labs) +
+    labs(
+      title = paste("Correlation of Demographic Change to Increased Republican Votes \n\n (Detail) \n", title_description), 
+      x = "Demographic (by age group, race/ethnicity, and sex)",
+      y = "Correlation",
+      fill = "Party Favorability"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'all.png'), height = 15)
+  
+changes |>
+    filter(age == 'total') |>
+    filter(!(Demographic %in% c("PERC_TOT_MALE","PERC_TOT_FEMALE"))) |>
+    mutate(group_label = paste(str_to_title(age), DemographicLabel)) |>
+    select(group_label, dem_change_by_rep_change) |>
+    ggplot(aes(x = reorder(group_label, dem_change_by_rep_change), y = dem_change_by_rep_change, fill = dem_change_by_rep_change > 0 )) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    scale_fill_manual(values = vals,
+                    labels = labs) +
+    labs(
+      title = paste("Correlation of Demographic Change to Increased Republican Votes \n\n (Summary) \n", title_description), 
+      x = "Demographic (by race/ethnicity, and sex)",
+      y = "Correlation",
+      fill = "Party Favorability"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'totals.png'))
+  
+  
+changes |>
+    filter(age == 'total') |>
+  mutate(DemographicLabel = if_else(Demographic == "PERC_TOT_MALE", "Male Population", "Female Population"))|>
+    filter(Demographic %in% c("PERC_TOT_MALE", "PERC_TOT_FEMALE")) |>
+    mutate(group_label = paste(str_to_title(age), DemographicLabel)) |>
+    select(group_label, dem_change_by_rep_change) |>
+    ggplot(aes(x = reorder(group_label, dem_change_by_rep_change), y = dem_change_by_rep_change, fill = dem_change_by_rep_change > 0 )) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    scale_fill_manual(values = vals,
+                    labels = labs) +
+    labs(
+      title = paste("Correlation of Demographic Change to Increased Republican Votes \n\n (Summary) \n", title_description), 
+      x = "Demographic (by sex)",
+      y = "Correlation",
+      fill = "Party Favorability"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5) ) # Center-align the title 
+  ggsave(paste0(output_dir,'by_sex.png'))
+  }
+```

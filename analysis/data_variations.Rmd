@@ -1,0 +1,123 @@
+---
+title: "data_variations"
+output: html_document
+---
+
+```{r}
+# Set options to display numbers in non-scientific notation
+options(scipen = 5)
+# Load required libraries for data manipulation and visualization
+library(tidyr)
+library(stringr)
+library(tidyverse)
+library(dplyr)
+```
+
+```{r}
+# Define the root directory and load the original (cleaned) census and election data
+root_dir = paste0(dirname(getwd()), '/')
+census_data_orig = readRDS(paste0(root_dir, 'data/census_data/election_census.rds'))
+election_data_orig = readRDS(paste0(root_dir, "data/election_data/election_data.rds"))
+```
+
+```{r}
+# Prepare and transform election data
+election_data = election_data_orig |> 
+  select(-candidate) |> # Remove the 'candidate' column as it is not needed
+  rename(STNAME = state, CTYNAME = county_name, YEAR = year) |> # Rename columns for consistency
+  mutate(CTYNAME = toupper(CTYNAME)) |> # Convert county names to uppercase for uniformity
+  group_by(STNAME, CTYNAME, party, YEAR, state_po, totalvotes, county_fips) |> 
+  summarise(candidatevotes = sum(candidatevotes, na.rm = TRUE), # Aggregate votes by grouping variables
+            .groups = "drop") |>
+  pivot_wider(names_from = party, values_from = candidatevotes) # Reshape data to wide format
+
+election_data = election_data |>
+  mutate(winner = if_else(DEMOCRAT > REPUBLICAN, 'D', 'R')) |> # Determine the winner for each county
+  filter(!is.na(county_fips)) |> # Remove rows with missing county FIPS codes
+  mutate(percent_rep = REPUBLICAN / (DEMOCRAT + REPUBLICAN)) # Calculate percentage of Republican votes
+
+```
+
+
+```{r}
+# Prepare and transform census data
+census_data = census_data_orig |>
+  mutate(CTYNAME = toupper(str_trim(str_replace(CTYNAME, "\\s+[^\\s]+$", "")))) |> # Clean and standardize county names
+  mutate(STNAME = toupper(STNAME)) |> # Convert state names to uppercase for uniformity
+  mutate(YEAR = as.integer(YEAR)) |> # Ensure year is an integer
+  mutate(chr_state = as.character(STATE)) |> # Convert state codes to character
+  mutate(chr_county = str_pad(as.character(COUNTY), width = 3, pad = "0")) |> # Pad county codes to 3 digits
+  mutate(county_fips = as.integer(paste(chr_state, chr_county, sep = ""))) |> # Combine state and county codes into FIPS
+  select(-chr_county, -chr_state, -STATE, -COUNTY, -DATE, -YEAR_NUM) |> # Drop unnecessary columns
+  filter(!is.na(county_fips)) |> # Filter out rows with missing FIPS codes
+  mutate(MINORITY_MALE = TOT_MALE - WA_MALE, # Calculate minority male population
+         MINORITY_FEMALE = TOT_FEMALE - WA_FEMALE) # Calculate minority female population
+
+# Reclassify age groups into categories
+census_data = census_data |>
+  filter(!(AGEGRP %in% c(1, 2, 3))) |> # Remove age groups below voting age
+  mutate(age = case_when(
+    AGEGRP == 99 ~ "total", # Total population
+    AGEGRP <= 7 ~ "ages 15-34", # Younger age group
+    AGEGRP >= 8 & AGEGRP <= 13 ~ "ages 35-64", # Middle-aged group
+    AGEGRP >= 14 ~ "ages 65+" # Older age group
+  ))
+
+# Summarize population data by age group and other variables
+sum_cols = c("TOT_POP","TOT_MALE","TOT_FEMALE","WA_MALE","WA_FEMALE", "BA_MALE","BA_FEMALE",
+             "IA_MALE","IA_FEMALE","AA_MALE","AA_FEMALE", "TOM_MALE","TOM_FEMALE", 
+             "NH_MALE","NH_FEMALE","H_MALE","H_FEMALE", "MINORITY_MALE", "MINORITY_FEMALE")
+
+census_data = census_data |>
+  group_by(age, county_fips, YEAR, STNAME, CTYNAME) |> # Group data by age and location variables
+  summarise(across(all_of(sum_cols), ~sum(.x)), .groups = "drop") |> # Summarize population columns
+  arrange(county_fips, YEAR) # Order by FIPS code and year
+
+```
+
+```{r}
+# Identify counties that flipped political alignment between elections
+flipped_counties = election_data |>
+  group_by(CTYNAME) |> # Group by county
+  arrange(STNAME, CTYNAME, YEAR) |> # Order data by state, county, and year
+  mutate(previous_winner = lag(winner)) |> # Add column for the winner in the previous election
+  filter(winner != previous_winner) # Keep only rows where the winner changed
+
+# Focus on counties that flipped between 2016 and 2020
+flipped_counties20 = flipped_counties |>
+  filter(YEAR == 2020) 
+
+# Filter data for the flipping counties in 2016 and 2020
+flipped_counties_2020 = election_data |>
+  filter(
+    county_fips %in% flipped_counties20$county_fips & 
+    YEAR %in% c(2016, 2020)
+  ) 
+
+# Merge with census data for the flipping counties
+flipped20 = flipped_counties_2020 |>
+  inner_join(census_data, by = c("county_fips","YEAR", "STNAME","CTYNAME")) |>
+  select(-NH_MALE) |>
+  select(-NH_FEMALE)
+
+# Save the flipping counties data to a CSV file
+write.csv(flipped20, paste0(root_dir,"data/flipped20.csv"))
+
+```
+
+```{r}
+# Analyze election results for 2020 with changes in voting patterns
+election20 = election_data |>
+  group_by(county_fips) |> # Group by county
+  arrange(STNAME, CTYNAME, YEAR) |> # Order data by state, county, and year
+  mutate(flip = (lag(winner) != winner)) |> # Identify if the county flipped
+  filter(YEAR %in% c(2016, 2020)) |> # Focus on 2020 data
+  inner_join(census_data, by = c("county_fips","YEAR", "STNAME","CTYNAME")) |>  # Merge with census data
+  select(-NH_MALE) |>
+  select(-NH_FEMALE)
+# Save the 2020 election analysis to a CSV file
+write.csv(election20, file = paste0(root_dir,"data/election20.csv"))
+
+election20 |>
+  distinct(county_fips)
+```

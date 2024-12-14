@@ -1,0 +1,323 @@
+---
+title: "EDA.Rmd"
+output: html_document
+date: "2024-11-11"
+---
+
+# Load Data
+Set root directory
+```{r}
+root_dir = paste0(dirname(getwd()), '/')
+```
+
+## Combine 2000-2010 Census Data
+```{r}
+
+data_path = paste0(root_dir, "data/census_data/00-10_census_data/")
+
+# create list of all the files in the data path that end in a two digit number.csv
+file_names = list.files(data_path, pattern = "\\d{2}.csv$", full.names = TRUE)
+
+# Use lapply to read in each file as a data frame
+file_data = lapply(file_names, read.csv)
+
+# combine them into a single data frame
+combined_census = do.call(rbind, file_data) 
+
+head(combined_census)
+
+write.csv(combined_census, paste0(root_dir, "data/census_data/cc-est2010-alldata.csv"), row.names = FALSE)
+
+census10 = combined_census
+```
+
+## Load Other Data
+```{r}
+census20 = read.csv(paste0(root_dir, 'data/census_data/CC-EST2020-ALLDATA.csv'))
+election = read.csv(paste0(root_dir, 'data/election_data/countypres_2000-2020.csv'))
+```
+
+```{r}
+head(census20)
+head(election)
+```
+
+# 2000-2010 Census Data Sanity Checks
+```{r}
+# check the number of rows and columns
+dim(census20)
+```
+
+```{r}
+# Check for duplicated rows
+sum(duplicated(census20))
+```
+
+
+## Number of blank cases in each column
+```{r}
+colSums(is.na(census20)) 
+```
+
+There are no NA values, but there are 'X' values in the year 1 data of the Chugach Census Area and Copper River Census Area in Alaska.
+This is because, as disclosed in the pdf that accompanies this data, "Effective January 2, 2019, two new Alaska county-equivalent areas, Chugach Census Area and Copper River Census Area, were formed from Valdez-Cordova Census Area, Alaska."
+```{r}
+# there are no NA values, but there are some 'X' values
+# View rows where any column contains the character 'X'
+census20[census20$TOT_POP == "X", ]
+
+# for the purposes of exploratory data analysis, I will be removing these census areas
+census20 = census20 |>
+  filter(CTYNAME != "Chugach Census Area") |>
+  filter(CTYNAME != "Copper River Census Area")
+
+```
+
+## Look at total distribution of each column (is it the shape you expect?)
+```{r}
+colnames = colnames(census20) 
+# remove string columns
+colnames = setdiff(colnames, c("STNAME","CTYNAME"))
+
+
+# convert population columns to numeric
+census20[, colnames] <- apply(
+  census20[, colnames], 
+  2, 
+  function(x) as.numeric(as.character(x))  # Convert to character before as.numeric for factors
+)
+# check that there are no NA values
+census20[apply(census20, 1, function(x) any(is.na(x))), ]
+```
+
+```{r}
+hist_no_outliers = function(df, column_name) {
+  # Check if the column exists in the dataframe
+  if (!(column_name %in% colnames(df))) {
+    stop("Column does not exist in the dataframe.")
+  }
+  
+  # Extract the column data
+  column_data = df[[column_name]]
+  
+  # Calculate the IQR
+  Q1 = quantile(column_data, 0.25)
+  Q3 = quantile(column_data, 0.75)
+  IQR_value = IQR(column_data)
+  
+  # Define the acceptable range for non-outlier values
+  lower_bound = Q1 - 1.5 * IQR_value
+  upper_bound = Q3 + 1.5 * IQR_value
+  
+  # Filter out outliers
+  df_no_outliers = df[column_data >= lower_bound & column_data <= upper_bound, ]
+  
+  # Plot histogram without outliers
+  hist(df_no_outliers[[column_name]], main = paste("Histogram of", column_name, "(No Outliers)"), 
+       xlab = column_name)
+}
+
+```
+
+```{r}
+# I ran this function for a much larger portion of the columns, but did not include them here so this document would not be too long
+hist_no_outliers(census20, "TOT_POP")
+hist_no_outliers(census20, "TOT_FEMALE")
+hist_no_outliers(census20, "TOT_MALE")
+
+```
+## Check for outliers
+```{r}
+# Because the majority of counties don't have many people and there are a few counties with a lot of people, the box plots make sense
+boxplot(census20$TOT_POP, main = "Total Population Boxplot")
+boxplot(census20$TOT_MALE, main = "Total Male Population Boxplot")
+boxplot(census20$TOT_FEMALE, main = "Total Female Population Boxplot")
+```
+
+## Do pop totals add up to total pop
+```{r}
+population_totals = function(rand_row) {
+  # get all the county and year info from that row
+  county_data = census20 |>
+      filter(STATE == rand_row$STATE) |>
+      filter(COUNTY == rand_row$COUNTY) |>
+      filter(YEAR == rand_row$YEAR) 
+  
+  tot_pop = county_data |> 
+    filter(AGEGRP == 0) |>
+    pull(TOT_POP)
+    
+  
+  # Check total male and female 
+  tot_m = county_data |> 
+    filter(AGEGRP == 0) |>
+    pull(TOT_MALE)
+  
+  tot_f = county_data |> 
+    filter(AGEGRP == 0) |>
+    pull(TOT_FEMALE)
+  
+  if ((tot_m + tot_f) == tot_pop) {
+    print("Male and Female populations sum to total")
+  } else {
+    print("WARNING: Male and Female populations do not sum to the total")
+  }
+}
+
+
+# pick random row
+rand_row = census20[sample(nrow(census20), 1), ]
+
+population_totals(rand_row)
+
+```
+
+
+
+
+
+
+# 2000-2010 Sanity Checks
+```{r}
+# check the number of rows and columns
+# the dimensions check with what I would expect
+dim(census10)
+```
+
+```{r}
+# Check for duplicated rows
+sum(duplicated(census10))
+```
+
+
+## Number of blank cases in each column
+```{r}
+colSums(is.na(census10)) 
+```
+
+## Look at total distribution of each column (is it the shape you expect?)
+```{r}
+colnames = colnames(census10) 
+# remove string columns
+colnames = setdiff(colnames, c("STNAME","CTYNAME"))
+
+# convert population columns to numeric
+census10[, colnames] <- apply(
+  census10[, colnames], 
+  2, 
+  function(x) as.numeric(as.character(x))  # Convert to character before as.numeric for factors
+)
+# check that there are no NA values
+census20[apply(census10, 1, function(x) any(is.na(x))), ]
+```
+
+
+```{r}
+# I ran this function for a much larger portion of the columns, but did not include them here so this document would not be too long
+hist_no_outliers(census10, "TOT_POP")
+hist_no_outliers(census10, "TOT_FEMALE")
+hist_no_outliers(census10, "TOT_MALE")
+
+```
+## Check for outliers
+```{r}
+# Because the majority of counties don't have many people and there are a few counties with a lot of people, the box plots make sense
+boxplot(census10$TOT_POP, main = "Total Population Boxplot")
+boxplot(census10$TOT_MALE, main = "Total Male Population Boxplot")
+boxplot(census10$TOT_FEMALE, main = "Total Female Population Boxplot")
+```
+
+## Do pop totals add up to total pop
+```{r}
+# pick random row
+rand_row = census10[sample(nrow(census10), 1), ]
+
+population_totals(rand_row)
+
+```
+
+
+# Election Data Sanity Checks
+Right number of rows  and columns
+```{r}
+# the dimensions check with what I would expect
+dim(election)
+```
+## Check for duplicates 
+```{r}
+# Check for duplicated rows
+sum(duplicated(election))
+```
+
+
+## Number of blank cases in each column
+```{r}
+colSums(is.na(election)) 
+# There are 52 NA values in the county_fips
+
+election |> filter(is.na(county_fips))
+# these are for maine, conneticut, and rhode island, where there are federal precincts, statewide write ins, and overseas voters
+# these are something to be aware of when I go through each state
+```
+
+## Look at total distribution of each column (is it the shape you expect?)
+```{r}
+histogram_no_outliers = function(col) {
+  # Extract the column data
+  column_data = df[[column_name]]
+  
+  # Calculate the IQR
+  Q1 = quantile(column_data, 0.25)
+  Q3 = quantile(column_data, 0.75)
+  IQR_value = IQR(column_data)
+  
+  # Define the acceptable range for non-outlier values
+  lower_bound = Q1 - 1.5 * IQR_value
+  upper_bound = Q3 + 1.5 * IQR_value
+  
+  # Filter out outliers
+  df_no_outliers = df[column_data >= lower_bound & column_data <= upper_bound, ]
+  
+  # Plot histogram without outliers
+  hist(df_no_outliers[[column_name]], main = paste("Histogram of", column_name, "(No Outliers)"), 
+       xlab = column_name)
+}
+
+hist_no_outliers(election, "candidatevotes")
+# the large amount of candidate votes clustered around zero makes sense because there are a number of third party candidates who dont get very many votes
+hist_no_outliers(election, "totalvotes")
+
+```
+## Check for outliers
+```{r}
+boxplot(election$candidatevotes, main = "Candidate Votes")
+boxplot(election$totalvotes, main = "Total Votes")
+# the large number of outliers also makes sense in this data set because there will be a portion of counties with large number of votes, while the rest have smaller numbers of votes (the number of votes is proportional to population)
+```
+
+## Do candidate totals add up?
+```{r}
+# pick random row
+rand_row = election[sample(nrow(election), 1), ]
+
+
+# get all the county and year info from that row
+county_data = election |>
+    filter(state == rand_row$state) |>
+    filter(county_name == rand_row$county_name) |>
+    filter(year == rand_row$year) 
+
+tot_votes = election |> 
+  filter(AGEGRP == 0) |>
+  pull(TOT_POP)
+  
+
+
+if (cand_sum == tot_votes) {
+  print("Candidate votes sum to total")
+} else {
+  print("WARNING: Candidate votes do not sum to the total")
+}
+
+
+```

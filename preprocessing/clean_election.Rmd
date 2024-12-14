@@ -1,0 +1,49 @@
+---
+title: "clean_election.Rmd"
+output: html_document
+date: "2024-11-30"
+---
+
+## R Markdown
+```{r}
+library(tidyverse)
+
+```
+
+```{r}
+root_dir = paste0(dirname(getwd()), '/')
+election_orig = read.csv(paste0(root_dir, 'data/election_data/countypres_2000-2020.csv'))
+```
+
+Main task is to combine all third party votes together
+```{r}
+election = election_orig
+
+election_no_third = election |>
+  filter(!(party %in% c("DEMOCRAT","REPUBLICAN"))) |>
+  group_by(year, state, county_name) |>
+  summarise(
+    across(all_of(c("candidatevotes")), ~sum(.x)),
+    party = "OTHER",
+    candidate = "OTHER",
+    across(all_of(c("state_po", "county_fips", "office", "totalvotes", "version", "mode")), ~first(.x)), 
+    .groups = "drop"
+  ) |> bind_rows(election |> filter(party %in% c("DEMOCRAT","REPUBLICAN"))) |>
+  arrange(year, state, county_name)
+```
+
+```{r}
+election_no_third |> filter(is.na(county_fips)) 
+
+
+election_no_third = election_no_third |>
+  select(-office) |>
+  select(-mode) |>
+  select(-version)
+
+current_dir = getwd()
+parent_dir = dirname(current_dir)
+write.csv(election_no_third, file = paste0(parent_dir, "/data/election_data/election_data.csv"), row.names = TRUE)
+saveRDS(election_no_third, file = paste0(parent_dir, "/data/election_data/election_data.rds"))
+  
+```

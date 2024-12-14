@@ -1,0 +1,231 @@
+
+```{r}
+library(tidyverse)
+# 2010-2020 census estimates
+root_dir = paste0(dirname(getwd()), '/')
+census20_orig = read.csv(paste0(root_dir, 'data/census_data/CC-EST2020-ALLDATA.csv'))
+census10_orig = read.csv(paste0(root_dir, 'data/census_data/cc-est2010-alldata.csv'))
+# colnames(census_data)
+```
+
+
+Remove overlapping years and combine
+
+```{r}
+# rename year column to year_num and create year column
+census10 = census10_orig |>
+    rename(YEAR_NUM = YEAR) |>
+    mutate(YEAR = case_when(
+                            YEAR_NUM == 1 ~ "2000",
+                            YEAR_NUM == 2 ~ "2000",
+                            YEAR_NUM == 3 ~ "2001",
+                            YEAR_NUM == 4 ~ "2002",
+                            YEAR_NUM == 5 ~ "2003",
+                            YEAR_NUM == 6 ~ "2004",
+                            YEAR_NUM == 7 ~ "2005",
+                            YEAR_NUM == 8 ~ "2006",
+                            YEAR_NUM == 9 ~ "2007",
+                            YEAR_NUM == 10 ~ "2008",
+                            YEAR_NUM == 11 ~ "2009",
+                            YEAR_NUM == 12 ~ "2010",
+                            YEAR_NUM == 13 ~ "2010")) |>
+  mutate(DATE = case_when(
+                            YEAR_NUM == 1 ~ "4/1/2000 base estimate",
+                            YEAR_NUM == 2 ~ "7/1/2000 estimate",
+                            YEAR_NUM == 3 ~ "7/1/2001 estimate",
+                            YEAR_NUM == 4 ~ "7/1/2002 estimate",
+                            YEAR_NUM == 5 ~ "7/1/2003 estimate",
+                            YEAR_NUM == 6 ~ "7/1/2004 estimate",
+                            YEAR_NUM == 7 ~ "7/1/2005 estimate",
+                            YEAR_NUM == 8 ~ "7/1/2006 estimate",
+                            YEAR_NUM == 9 ~ "7/1/2007 estimate",
+                            YEAR_NUM == 10 ~ "7/1/2008 estimate",
+                            YEAR_NUM == 11 ~ "7/1/2009 estimate",
+                            YEAR_NUM == 12 ~ "4/1/2010 census",
+                            YEAR_NUM == 13 ~ "7/1/2010 estimate")) 
+
+```
+
+
+```{r}
+census20 = census20_orig |>
+    rename(YEAR_NUM = YEAR) |>
+    mutate(YEAR = case_when(
+                            YEAR_NUM == 1 ~ "2010",
+                            YEAR_NUM == 2 ~ "2010",
+                            YEAR_NUM == 3 ~ "2010",
+                            YEAR_NUM == 4 ~ "2011",
+                            YEAR_NUM == 5 ~ "2012",
+                            YEAR_NUM == 6 ~ "2013",
+                            YEAR_NUM == 7 ~ "2014",
+                            YEAR_NUM == 8 ~ "2015",
+                            YEAR_NUM == 9 ~ "2016",
+                            YEAR_NUM == 10 ~ "2017",
+                            YEAR_NUM == 11 ~ "2018",
+                            YEAR_NUM == 12 ~ "2019",
+                            YEAR_NUM == 13 ~ "2020")) |>
+    mutate(DATE = case_when(
+                            YEAR_NUM == 1 ~ "4/1/2010 census",
+                            YEAR_NUM == 2 ~ "4/1/2010 estimate",
+                            YEAR_NUM == 3 ~ "7/1/2010 estimate",
+                            YEAR_NUM == 4 ~ "7/1/2011 estimate",
+                            YEAR_NUM == 5 ~ "7/1/2012 estimate",
+                            YEAR_NUM == 6 ~ "7/1/2013 estimate",
+                            YEAR_NUM == 7 ~ "7/1/2014 estimate",
+                            YEAR_NUM == 8 ~ "7/1/2015 estimate",
+                            YEAR_NUM == 9 ~ "7/1/2016 estimate",
+                            YEAR_NUM == 10 ~ "7/1/2017 estimate",
+                            YEAR_NUM == 11 ~ "7/1/2018 estimate",
+                            YEAR_NUM == 12 ~ "4/1/2019 census",
+                            YEAR_NUM == 13 ~ "7/1/2020 estimate")) 
+```
+
+### Evaluate Ethnic and Racial Group Overlaps in 2010
+Evaluate how the ethnic and racial groups in the 2000-2010 dataset should be reconciled with those in the 2010-2020 dataset by evaluating the 2010 data, especially how the official census data was presented
+```{r}
+# filter down to new york county because it is a county that is likely to have sizable populations of most groups
+# use the total populations (not split by age)
+# remove non-numeric columns and largest group columns
+excluded_cols = c('SUMLEV', 'STATE', 'COUNTY', 'STNAME', 'CTYNAME', 'YEAR','YEAR_NUM', 'DATE', 'AGEGRP')
+
+excluded_groups = c()
+
+census10_10 = census10 |> 
+  filter(YEAR_NUM == 12) |> 
+  filter(CTYNAME == "New York County")|>
+  filter(AGEGRP == 99) 
+
+census20_10 = census20 |> 
+  filter(YEAR_NUM == 1) |> 
+  filter(CTYNAME == "New York County") |>
+  filter(AGEGRP == 0)
+```
+#### Check which groups match
+```{r}
+groups10 = colnames(census10_10)
+groups20 = colnames(census20_10)
+
+eq = groups20[groups20 %in% groups10]
+census20_overlap = census20_10 |> select(all_of(eq))
+
+census20_overlap == census10_10
+```
+All of the columns that are shared between the two data sets for this row are the same, so I am wondering if there are double counts in the 2010-2020 version
+```{r}
+sum_pops = function(row, cols){
+  to_sum = row |>
+    select(all_of(cols))|>
+    as.vector()|>
+    as.numeric()
+  
+  sum = sum(to_sum)
+  return(sum)
+}
+biggest_groups = c("WA_MALE","WA_FEMALE", "BA_MALE","BA_FEMALE","IA_MALE","IA_FEMALE","AA_MALE","AA_FEMALE", "TOM_MALE","TOM_FEMALE")
+sum_pops(census20_overlap[1,], biggest_groups)
+census20_overlap["TOT_POP"]
+
+sexes = c("TOT_MALE","TOT_FEMALE")
+sum_pops(census20_overlap[1,],sexes)
+
+hispanic = c("NH_MALE","NH_FEMALE","H_MALE","H_FEMALE")
+sum_pops(census20_overlap[1,],hispanic)
+
+```
+There are double counts in both census sets. The male and female populations, the large population groups (in biggest_groups), and the groups that represent hispanic and non-hispanic (in hispanic) all sum to the total population. I will be working only with these columns from now on.
+
+## Select columns
+```{r}
+
+columns = c("STATE", "COUNTY", "STNAME", "CTYNAME","YEAR","YEAR_NUM", "AGEGRP", "DATE", "TOT_POP","TOT_MALE","TOT_FEMALE","WA_MALE","WA_FEMALE", "BA_MALE","BA_FEMALE","IA_MALE","IA_FEMALE","AA_MALE","AA_FEMALE", "TOM_MALE","TOM_FEMALE", "NH_MALE","NH_FEMALE","H_MALE","H_FEMALE")
+
+census10 = census10 |>
+  select(all_of(columns))
+census20 = census20 |>
+  select(all_of(columns))
+
+# remove the overlapping dates from the 2010-2020 census
+overlaps20 = c("4/1/2010 census", "4/1/2010 estimate", "7/1/2010 estimate")
+census20_no_overlap = census20 |>
+  filter(!(DATE %in% overlaps20))
+
+```
+
+
+```{r}
+pop_columns = c("TOT_POP","TOT_MALE","TOT_FEMALE","WA_MALE","WA_FEMALE", "BA_MALE","BA_FEMALE","IA_MALE","IA_FEMALE","AA_MALE","AA_FEMALE", "TOM_MALE","TOM_FEMALE", "NH_MALE","NH_FEMALE","H_MALE","H_FEMALE")
+
+census10 = census10 |>
+  mutate(across(all_of(pop_columns), as.numeric))
+
+census20_no_overlap = census20_no_overlap |>
+  mutate(across(all_of(pop_columns), as.numeric))
+
+census20_no_overlap = census20_no_overlap |>
+  filter(CTYNAME %in% c("Chugach Census Area", "Copper River Census Area")) |> # Filter relevant rows
+  group_by(YEAR_NUM, AGEGRP) |> # Group by YEAR_NUM and AGEGRP
+  summarise(
+    across(all_of(pop_columns), ~sum(.x, na.rm = TRUE)), # Sum the population columns
+    CTYNAME = "Valdez-Cordova Census Area", # Add the new CTYNAME
+    STATE = 2,
+    STNAME = "Alaska",
+    COUNTY = 261,
+    across(YEAR, ~ first(.x)), 
+    across(DATE, ~ first(.x)), 
+    .groups = "drop"
+  ) |>
+  bind_rows(census20_no_overlap |> filter(!CTYNAME %in% c("Chugach Census Area", "Copper River Census Area"))) # Combine with the rest of the data
+```
+This eliminates the problem of additional mixed race categories being included in the 2010-2020 census, but not in the 2000-2010 census
+
+### Make AGEGRP column consistent
+As I cannot split the 0-4 age group in the 2010-2020 data, I will combine the age 0 and age 1-4 groups in the 2000-2010 data
+```{r}
+pop_columns = c("TOT_POP","TOT_MALE","TOT_FEMALE","WA_MALE","WA_FEMALE", "BA_MALE","BA_FEMALE","IA_MALE","IA_FEMALE","AA_MALE","AA_FEMALE", "TOM_MALE","TOM_FEMALE", "NH_MALE","NH_FEMALE","H_MALE","H_FEMALE")
+census10 = census10 |>
+  group_by(YEAR_NUM, STATE, COUNTY,AGEGRP = ifelse(AGEGRP == 0, 1, AGEGRP)) |>  
+  summarise(
+    across(all_of(pop_columns), ~ sum(.x, na.rm = TRUE)), # Summing population columns
+    across(-all_of(pop_columns), ~ first(.x)), # Retain non-population columns
+    .groups = "drop"
+  )
+
+census20_no_overlap = census20_no_overlap |>
+  mutate(AGEGRP = ifelse(AGEGRP == 0, 99, AGEGRP))
+  
+```
+Rearrange columns
+```{r}
+census10 = census10 |>
+  select(all_of(columns))
+
+census20 = census20_no_overlap |>
+  select(all_of(columns))
+
+
+```
+
+
+Now, I can combine the two datasets
+```{r}
+combined_census = rbind(census10, census20)
+
+```
+
+## Combined
+```{r}
+election_years = c("2000","2004","2008","2012","2016","2020")
+pres_census = combined_census |>
+    filter(YEAR %in% election_years)
+```
+
+```{r}
+current_dir = getwd()
+parent_dir = dirname(current_dir)
+combined_path = file.path(parent_dir, "/data/census_data/combined_census.csv")
+election_path = file.path(parent_dir, "/data/census_data/election_census.csv")
+write.csv(combined_census, file = combined_path, row.names = TRUE)
+write.csv(pres_census, file = election_path, row.names = TRUE)
+saveRDS(combined_census, file = paste0(root_dir, 'data/census_data/combined_census.rds'))
+saveRDS(pres_census, file = paste0(root_dir, 'data/census_data/election_census.rds'))
+```

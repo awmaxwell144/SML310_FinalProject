@@ -1,0 +1,30 @@
+---
+title: "combine_census"
+output: html_document
+---
+# Load Data
+Set root directory
+```{r}
+root_dir = paste0(dirname(getwd()), '/')
+```
+
+## Combine 2000-2010 Census Data
+```{r}
+
+data_path = paste0(root_dir, "data/census_data/00-10_census_data/")
+
+# create list of all the files in the data path that end in a two digit number.csv
+file_names = list.files(data_path, pattern = "\\d{2}.csv$", full.names = TRUE)
+
+# Use lapply to read in each file as a data frame
+file_data = lapply(file_names, read.csv)
+
+# combine them into a single data frame
+combined_census = do.call(rbind, file_data) 
+
+head(combined_census)
+
+write.csv(combined_census, paste0(root_dir, "data/census_data/cc-est2010-alldata.csv"), row.names = FALSE)
+
+census10 = combined_census
+```
